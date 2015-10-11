@@ -1,0 +1,345 @@
+---
+title: What is the standard of comparison for the Kuriakose-Robins Test Statistic?
+author: Jake Bowers
+date: Oct 9, 2015
+---
+
+
+```{r include=FALSE, cache=FALSE}
+# Some customization.  You can alter or delete as desired (if you know what you are doing).
+# knitr settings to control how R chunks work.
+
+## To make the html file do
+## render("KuriakoseRobins.Rmd",output_format=html_document(fig_retina=FALSE))
+## To make the pdf file do
+## render("KuriakoseRobins.Rmd",output_format=pdf_document())
+
+require(knitr)
+opts_chunk$set(
+  tidy=FALSE,     # display code as typed
+  size="small",    # slightly smaller font for code
+  echo=TRUE,
+  results='markup',
+  strip.white=TRUE,
+  cache=FALSE,
+  highlight=TRUE,
+  width.cutoff=132,
+  size='footnotesize',
+  out.width='.9\\textwidth',
+  message=FALSE,
+  comment=NA)
+```
+
+
+Just for fun, I asked myself what the distribution of the maximum percentage
+similar statistic would be if, in fact, there were no relationship between the
+values of the variables between any two respondents in the NES 2008. That is, I expect that, even if there were no systematic relationship between any two rows in the data set, that the test statistic proposed by Kuriakose and Robins would vary across replications of the data generating process. And I'd like to see what that variation looks like.
+
+Variables in the NES 2008 that I used below:
+
+```
+V085063b    D1b. Feeling thermometer: Democratic Presidential candidate
+V085063c    D1c. Feeling thermometer: Republican Presidential candidate
+V085084    G1a. Liberal-Conservate: self placement
+V085084a    G1b. If had to choose, liberal or conservative
+V083098x    J1x. SUMMARY: R Party Identification
+V081101    HHList.1. Respondent: gender
+V081102    HHList.2. Respondent: race
+V081103    HHList.3. Respondent: Latino status
+V081103a    HHList.3a. Respondent: race and Latino status
+V081104    HHList.4. Respondent: age
+V083265a    Y31a. How many children in HH age 10 and younger
+V083265b    Y31b. How many children in HH age 11-17
+V083248x    Y21ax. SUMMARY: HOUSEHOLD INCOME
+V083218x    Y3x. SUMMARY: R educational attainment
+```
+
+I'm just revealing all of my R code.
+
+
+```{r, cache=TRUE}
+## load("/Users/jwbowers/Documents/PROJECTS/Fall13Classes/PS230/PS230Files/nes08sm.rda")
+load(url("http://jakebowers.org/PS230/nes08sm.rda"))
+
+nes08sm<-within(nes08sm,{
+		  ftdemrep<-V085063b-V085063c
+		  ideo<-V085084
+		  ideo[ideo==4&(V085084a==1&!is.na(V085084a))]<-3
+		  ideo[ideo==4&(V085084a==3&!is.na(V085084a))]<-5
+		  ideo[ideo==4&(V085084a==5&!is.na(V085084a))]<-4
+		  pid<-V083098x
+		  female<-as.numeric(V081101==2)})
+
+covs<-c("female","ideo","pid","V081103a","V081104","V083265a","V083248x","V083265b")
+
+```
+
+What is the distribution that we would see if each respondent was completely independent of each other? I take this to be the null hypothesis.
+
+First, calculate the differences between the rows to get the maximum percentage match statistic.
+
+```{r}
+
+## Get rid of NA for now.
+wrkdat<-na.omit(nes08sm)
+
+wrkdat[1:4,covs]
+
+sum(wrkdat[1,covs]==wrkdat[2,covs])
+sum(wrkdat[1,covs]==wrkdat[3,covs])
+sum(wrkdat[1,covs]==wrkdat[2,covs])/length(covs)
+sum(wrkdat[1,covs]==wrkdat[3,covs])/length(covs)
+```
+
+I did a fair amount of experimenting with calculating pairwise differences. It was taking a very long time! So, I wrote the code in C.
+
+```{r, warning=FALSE, results='hide'}
+## https://stackoverflow.com/questions/13324664/define-a-matrix-in-r-and-pass-it-to-c
+require(Rcpp)
+require(inline)
+
+fx<-cxxfunction(
+		signature(x="numeric"),
+		body='
+		Rcpp::NumericMatrix xx(x);
+		int nr = xx.nrow();
+		int nc = xx.ncol();
+		NumericMatrix out(nr,nr);
+		for( int i = 0; i < nr; i++ ){
+		  for( int j = 0; j < nr; j++ ){
+		    out(i,j) = sum( xx(i,_) == xx(j,_) );
+		  }
+		}
+		return out;
+		',plugin="Rcpp"
+		)
+
+## This next is a test to make sure that the code does what it is supposed to.
+mat<-fx(as.matrix(wrkdat[1:4,covs]))
+testrow1<-c(sum(wrkdat[1,covs]==wrkdat[1,covs]),
+	    sum(wrkdat[1,covs]==wrkdat[2,covs]),
+	    sum(wrkdat[1,covs]==wrkdat[3,covs]),
+	    sum(wrkdat[1,covs]==wrkdat[4,covs]))
+stopifnot(mat[1,]==testrow1)
+
+
+alldiffs<-fx(as.matrix(wrkdat[,covs]))/length(covs)
+
+```
+
+```{r, eval=FALSE, include=FALSE}
+## These next are like 1000 times slower than fx()
+## ## https://stackoverflow.com/questions/6269526/r-applying-a-function-to-all-row-pairs-of-a-matrix-without-for-loop
+## system.time(
+## 	    blah<-outer(1:nrow(wrkdat),1:nrow(wrkdat),
+## 			FUN = Vectorize( function(i,j) sum(wrkdat[i,covs]==wrkdat[j,covs] )/length(covs)) )
+## 				      )
+##
+##
+## system.time({
+## 	    res<-matrix(NA,nrow(wrkdat),nrow(wrkdat))
+## 	    for(i in 1:nrow(wrkdat)){
+## 	      for(j in 1:nrow(wrkdat)){
+## 		res[i,j]<-sum(wrkdat[i,covs]==wrkdat[j,covs])
+## 	      }
+## 	    }
+## }
+## )
+##
+
+##library(proxy)
+##proxy::dist(wrkdat[1:4,covs],by_rows=TRUE,method="simple matching")
+```
+
+So, how should we represent the "no similarity between people" condition?  My
+hunch is that we should shuffle the values of the variables within person. This
+means that the correlations between the variables will be preserved  --- the
+idea is not that each variable is completely independent of each other, but
+merely that there is excess similarity.
+
+Now, one thing to notice is that the correlations that exist in the data may or
+may not reflect fraudulent duplication of rows. Duplication should increase
+correlation. But, while we can represent the hypothesis of independent or
+no-relationship well, it is harder to represent a hypothesis of "independent
+rows but correlated columns" in a precise way. The hypothesis requires that we
+specify a correlation. And I don't want to do that. I'd prefer to use the
+pre-existing relationships between the variables as a guide.
+
+Anyway, here is a demonstration that shuffling maintains correlations even
+though those correlations are no the same as the ones in the original data. The
+correlations that we observe tend to be larger than those that we generate from
+the shuffled data. I would have imagined that we would *remove* some
+correlation by shuffling within person.
+
+```{r cortest, cache=TRUE}
+
+wrkmat<-as.matrix(wrkdat[,covs]) ## just to speed up rest of work
+
+obscor<-cor(wrkmat)
+
+shufcor<-function(shufwithinrow=TRUE){
+  if(shufwithinrow){
+    newdat<-t(apply(wrkmat,1,sample))
+  } else {
+    newdat<-apply(wrkmat,2,sample)
+  }
+  return(cor(newdat))
+}
+
+library(parallel)
+library(compiler)
+shufcorcmp<-cmpfun(shufcor)
+
+nsims<-10000
+set.seed(12345)
+reslst1<-mclapply(1:nsims,function(i){ shufcorcmp() },mc.cores=detectCores())
+res1<-simplify2array(reslst1)
+set.seed(12345)
+reslst2<-mclapply(1:nsims,function(i){ shufcorcmp(shufwithinrow=FALSE) },mc.cores=detectCores())
+res2<-simplify2array(reslst2)
+
+```
+
+After the shuffling within row, the correlations all basically converge on -.12. Shuffling each column erases the correlations. The fact that all of the pairwise correlations converge on the same number make sense because each column now has equal chance to contain any of the values found in any other column conditional on person.  I suppose that there just must be correlation within person across values (I present a very rough within to between variance calc to show this below) in the intracluster correlation coefficient below.
+
+```{r}
+options(digits=4,scipen=8)
+apply(res1,c(1,2),mean)
+zapsmall(apply(res2,c(1,2),mean))
+
+longdat<-data.frame(id=rep(1:nrow(wrkdat),length(covs)),
+		    vars=unlist(wrkdat[,covs]))
+
+library(ICC)
+ICCbare(data=longdat,x=id,y=vars)
+
+
+```
+
+Now, lets try to shuffle each row and recalculate the test statistic 1000 times. The test statistic is the maximum proportion similar for each person.
+
+
+```{r}
+
+## Testing
+## propsim<-mat/length(covs)
+## diag(propsim)<-0
+## maxpropsim<-apply(propsim,1,max)
+
+teststat<-function(themat){
+  ## themat is an n by p matrix
+  propsim<-fx(themat)/ncol(themat)
+  diag(propsim)<-0
+  return(apply(propsim,1,max))
+}
+```
+
+```{r, cache=TRUE}
+
+set.seed(12345)
+nulldistlst<-mclapply(1:nsims,function(i){
+			newmat<-t(apply(wrkmat,1,sample))
+			teststat(newmat)
+		    },mc.cores=detectCores())
+
+nulldist<-simplify2array(nulldistlst)
+
+dim(nulldist)
+
+```
+
+Now, usually our test statistic would not be a vector, but would summarize the claim of "falsified" in a single measure. We could do something like that here --- say, using the mean of the many maxima?
+
+This next shows that the mean of the maximum percentage in pairwise agreement *given shuffling* is around `r round(mean(as.vector(nulldist)),3)` (plus or minus simulation error on the order of `r sqrt(1/nsims)` ). 
+
+```{r}
+
+obststat<-teststat(wrkmat)
+obsmean<-mean(obststat)
+obsmean ## the mean of the test statistics observed in the data without shuffling
+
+nulldistofmean<-apply(nulldist,2,mean)
+
+## THis is kind of funny because I would have expected 0 on average here. Instead, we see it being very common for folks to have at least one person in the dataset with whom share share 50% the same values --- even under within person shuffling.
+summary(nulldistofmean)
+summary(apply(nulldist,2,median))
+
+## Here are the observed unique values of the maximum. Makes some sense since we have 8 covariates
+table(as.vector(nulldist))
+## Compare to possibilities
+
+(1:8)/8
+
+```
+How do our observed values compare against what they would have turned out to be if the order of questions were randomized for each person? Mostly our test statistics look weird from the perspective of this particular conception of the null.
+
+```{r}
+## Using the minimum of the two tailed area for the measure of dissimilarity with the null distribution
+## aka p-values.
+obsVSsim<-sapply(1:nrow(wrkdat),function(i){
+		   min( mean(nulldist[i,] >= obststat[i]),
+		       mean(nulldist[i,] <= obststat[i]))
+		    })
+
+summary(obsVSsim)
+quantile(obsVSsim,seq(0,1,.1))
+
+```
+
+Now let's shuffle each column. This ought to break the correlations as well as pairwise relationship.
+
+
+```{r colshuf, cache=TRUE}
+
+set.seed(12345)
+nulldistlst1<-mclapply(1:nsims,function(i){
+			 newmat<-apply(wrkmat,2,sample)
+			 teststat(newmat)
+		    },mc.cores=detectCores())
+
+nulldist1<-simplify2array(nulldistlst1)
+
+dim(nulldist1)
+
+```
+
+If the values of each variable were randomly assigned with equal probability independently of each other, the average maximum pairwise percent similar would be around `r round(mean(as.vector(nulldist1)),3)` (plus or minus simulation error). 
+
+
+```{r}
+
+nulldist1ofmean<-apply(nulldist1,2,mean)
+
+summary(nulldist1ofmean)
+summary(apply(nulldist1,2,median))
+
+summary(as.vector(nulldist1))
+```
+
+And our observed statistic would mostly look typical of this distribution:
+
+```{r}
+obsVSsim1<-sapply(1:nrow(wrkdat),function(i){
+		   min( mean(nulldist1[i,] >= obststat[i]),
+		       mean(nulldist1[i,] <= obststat[i]))
+		    })
+
+summary(obsVSsim1)
+quantile(obsVSsim1,seq(0,1,.1))
+
+```
+
+# Overall
+
+What should fraud be measured against? How can we distinguish fraud from not-fraud? It depends on how we represent "not-fraud" and "fraud". Kuriakose and Robins represent fraud in a reasonable way --- the maximum percentage same values across the relevant variables for a given respondent. However, because they do not represent "not-fraud" we do not know what to make of numbers arising from their measure. In this very disorganized and hastily sketch memo, I propose two different ways to characterize "not fraud". Both seem reasonable although neither make me entirely happy. If we think about shuffling values within row, we preserve correlations among variables, but we do not know how much of those variable-to-variable relationships might arise from an artificially inflated sample. If we shuffle within columns, then we break all relationships between variables. This seems unrealistic from the perspective of representing the not-fraud comparison.
+
+I also sketched out some ways to compare what one observes (in terms of the test statistic that Kuriakose and Robins recommend) to what one would observe under those two "not-fraud" scenarios. In the case used for playing around here, the average maximum percentage agreement can be quite high under not-fraud scenarios (for example, about `r mean(as.vector(nulldist1)>.8)` of the shuffle-column version are above .8). The shuffle-row version does not have such high average maximum percentage agreement in this little case.
+
+I suspect that this statistic may be useful in the search for fraud.  I
+speculate that the details of the distribution of this test statistic under any
+given not-fraud scenario depend critically on the configuration of the
+particular data -- sample size, number of variables, variance of the variables,
+covariance among the variables, number of categories taken by each variable.
+
+
+
